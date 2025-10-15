@@ -2,13 +2,13 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h> // Librairie ArduinoJson
 #include <DHT.h>
-#define VERSION "1.2"
+#define VERSION "1.3.1"
 #define DURATION_PING 25000
 
 bool Command_FirmwareUpgrade = false;
 bool Command_LED = false;
 
-bool LED_Status = false;
+bool LED_Status = true;
 
 bool b_SendAcknowledgement = false;
 
@@ -33,7 +33,7 @@ const int pinEntree = D6;  // ou directement 14
 // --- DHT ---
 #define DHTPIN D7       // Pin du capteur DHT
 #define DHTTYPE DHT22   // DHT11 ou DHT22 selon ton capteur
-//DHT dht(DHTPIN, DHTTYPE);
+DHT dht(DHTPIN, DHTTYPE);
 
 WebSocketsClient webSocket;
 volatile bool signalDetecte = false; // flag mis à jour par l'interruption
@@ -48,18 +48,23 @@ void ChangeLEDStatus(){
 }
 
 
-void envoi(){
+void envoi(char* type, char* Com){
   if (webSocket.isConnected()) {
 
- //   temperature = dht.readTemperature(); // °C
- //   humidity = dht.readHumidity();
+//    if (b_First) { b_First = false;  strcpy(Com,"START") ; }
+       
+//    humidity = dht.readHumidity();
+//    Serial.println(temperature); 
 
-    StaticJsonDocument<300> doc;
-    doc["type"] = "sensor_update";
-    doc["ring"] = etat;
-    doc["Ack"] = Str_SocketAcknoledgement;
+    StaticJsonDocument<350> doc;
+    doc["type"] = type;
     doc["mac"] = mac;
+    doc["Com"] = Com;
+    doc["Temp"] = dht.readTemperature();
+    doc["Ack"] = Str_SocketAcknoledgement;
+    doc["ring"] = etat;
     doc["V"] = VERSION;
+    
 
     String jsonMessage;
     
@@ -96,7 +101,8 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_CONNECTED:
       Serial.println("WebSocket connecté !");
-      webSocket.sendTXT("{\"type\":\"sensor_update\"}");
+      envoi("arduino","PING2"); 
+  //    webSocket.sendTXT("{\"type\":\"arduino\"  , \"mac\":\"AA:BB:CC:DD\"   }");
       break;
 
     case WStype_TEXT:
@@ -150,11 +156,11 @@ void setup() {
   Serial.println("\nWi-Fi connecté !");
   mac=WiFi.macAddress();
   Serial.println(mac);
-//  dht.begin();
-//  pinMode(pinEntree, INPUT);  // ou INPUT_PULLUP selon ton montage
+
+  dht.begin();
 
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN,LOW);
+  digitalWrite(LED_BUILTIN,LED_Status);
 
   pinMode(pinEntree, INPUT); // Entrée avec résistance interne
   attachInterrupt(digitalPinToInterrupt(pinEntree), detectSignal, RISING);
@@ -172,45 +178,33 @@ void loop() {
   // 🟡 Keep-alive (ping sortant)
   if (millis() - Last_Time_ping > DURATION_PING) {
     if (webSocket.isConnected()) {
-      webSocket.sendTXT("{\"type\":\"sensor_update\"}");
+      envoi("sensor_update", "PING");
+      //webSocket.sendTXT("{\"type\":\"sensor_update\"}");
       Serial.println("📤 Ping envoyé");
     }
     Last_Time_ping = millis();
   }
 
-  if (Command_FirmwareUpgrade) {envoi(); FOTA_Check();} 
+ 
 
+/* Gestion Sonnerie */
   if (signalDetecte) {
       signalDetecte = false;
       etat = digitalRead(pinEntree);
       if (etat == HIGH) {
          Serial.println("HIGH");
         if ( (millis() - Last_etat_sent) > 3000 ) { 
-            envoi();
+            envoi("sensor_update","ring");
             etat = false;
         }
       }     
   }
 
-/*
+ 
 
- if ( (millis() - Last_Time_ping) > DURATION_PING ) {envoi();}
-
- if ( (millis() - Last_Time_receivedfromServer) > (DURATION_PING + 2000) )
-  {
-    Serial.println("** TIMEOUT RECEPTION DU SERVER ** ");
-    // connexion(); 
-    // delay(1000); 
-    envoi(); 
-  }
-*/
- if (b_SendAcknowledgement) 
-  envoi();     
-
-  if (Command_LED) {
-    ChangeLEDStatus();
-    Serial.println("**** COMMMAND_LED  ******");
-    Command_LED = false;
-  }
+ if (Command_LED)             { Command_LED = false; Serial.println("**** COMMMAND_LED  ******");  ChangeLEDStatus(); }
+ if (Command_FirmwareUpgrade) { envoi("sensor_update", "ACK");  FOTA_Check();                                         }  
+    
+ if (b_SendAcknowledgement) envoi("sensor_update", "ACK");      
   
 }
