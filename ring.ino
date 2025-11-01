@@ -2,19 +2,31 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h> // Librairie ArduinoJson
 #include <DHT.h>
-#define VERSION "1.3.1"
+#include <Ticker.h>
+
+#define VERSION "1.4.1"
+
 #define DURATION_PING 25000
+#define DURATION_SIREN 4.0 // en secondes
+
+Ticker Timer_ON;
+Ticker Timer_OFF;
 
 bool Command_FirmwareUpgrade = false;
 bool Command_LED = false;
+bool Command_Reset = false;
+bool Command_Sleep = false;
 
 bool LED_Status = true;
+
+bool b_First = true;
 
 bool b_SendAcknowledgement = false;
 
 float temperature;
 float humidity;
 
+unsigned long Time_ON = 0;
 unsigned long Last_Time_ping = 0;
 unsigned long Last_etat_sent = 0;
 unsigned long Last_Time_receivedfromServer=0;
@@ -42,20 +54,20 @@ void IRAM_ATTR detectSignal() {
   signalDetecte = true;
 }
 
-void ChangeLEDStatus(){
-  LED_Status = not LED_Status;
-  digitalWrite(LED_BUILTIN,LED_Status);
+
+void LED_ON() {
+  digitalWrite(LED_BUILTIN, false);
 }
 
+void LED_OFF () {
+  digitalWrite(LED_BUILTIN, true);
+}
 
 void envoi(char* type, char* Com){
   if (webSocket.isConnected()) {
 
 //    if (b_First) { b_First = false;  strcpy(Com,"START") ; }
        
-//    humidity = dht.readHumidity();
-//    Serial.println(temperature); 
-
     StaticJsonDocument<350> doc;
     doc["type"] = type;
     doc["mac"] = mac;
@@ -124,17 +136,42 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       // Récupère les champs
       const char* type =    doc2["type"]; 
       const char* payload  = doc2["payload"];
+      const char* sleep     = doc2["sleep"];
 
+      int sleepVal = 0;
       // Affiche les résultats
       Serial.print("Type : ");    Serial.println(type);
       Serial.print("payload : "); Serial.println(payload);
+      if (doc2.containsKey("sleep")) { 
+          if (doc2["sleep"].is<const char*>()) {
+            const char* sleepStr = doc2["sleep"];
+            Serial.print("sleep (string) : ");
+            Serial.println(sleepStr);
+          } else if (doc2["sleep"].is<int>()) {
+            sleepVal = doc2["sleep"];
+            Serial.print("sleep (int) : ");
+            Serial.println(sleepVal);
+            } else {
+            Serial.println("sleep présent mais type inconnu");
+              }
+      }
 
 
-      if (strcmp(type,"command") == 0) { Serial.println("***** RECEPTION DU SERVEUR ********** "); Last_Time_receivedfromServer = millis(); }
+      if (strcmp(type,"command") == 0) { Serial.println("***** RECEPTION COMMANDE   ********** "); Last_Time_receivedfromServer = millis(); }
+      if (strcmp(type,"server")  == 0) { Serial.println("***** CONNECTE AU SERVER   ********** "); Last_Time_receivedfromServer = millis(); Command_Sleep = true; }
 
-      if (strcmp(payload,"FIRM_UPG") == 0) { Command_FirmwareUpgrade = true; b_SendAcknowledgement = true; Str_SocketAcknoledgement = "FIRM_UPG"; Serial.println("FIRMWARE UPGRADE RECEIVED FROM BROWSER");}
+      if (strcmp(payload,"FIRM_UPG") == 0) { 
+          Command_FirmwareUpgrade = true; 
+          b_SendAcknowledgement = true;
+          Str_SocketAcknoledgement = "FIRM_UPG";
+          Serial.println("FIRMWARE UPGRADE RECEIVED FROM BROWSER");
+      }
 
       if (strcmp(payload,"ON") == 0) { Command_LED = true; b_SendAcknowledgement = true; Str_SocketAcknoledgement = "ON"; Serial.println("***   ON  ******");}
+
+      if (strcmp(payload,"RESET") == 0) { Command_Reset = true; b_SendAcknowledgement = true; Str_SocketAcknoledgement = "RESET"; Serial.println("***   RESET  ******");}
+
+      if ( (strlen(payload) == 0) && (sleepVal > 0) ) { Serial.println("passage en deep sleep") ; delay(100); ESP.deepSleep(sleepVal * 1000000); }
 
       break;
   /*
@@ -148,6 +185,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("*****"); Serial.print("****  VERSION = ") ; Serial.println(VERSION);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
    delay(500);
@@ -160,7 +198,7 @@ void setup() {
   dht.begin();
 
   pinMode(LED_BUILTIN, OUTPUT);
-  digitalWrite(LED_BUILTIN,LED_Status);
+  digitalWrite(LED_BUILTIN,true);
 
   pinMode(pinEntree, INPUT); // Entrée avec résistance interne
   attachInterrupt(digitalPinToInterrupt(pinEntree), detectSignal, RISING);
@@ -200,11 +238,16 @@ void loop() {
       }     
   }
 
- 
 
- if (Command_LED)             { Command_LED = false; Serial.println("**** COMMMAND_LED  ******");  ChangeLEDStatus(); }
- if (Command_FirmwareUpgrade) { envoi("sensor_update", "ACK");  FOTA_Check();                                         }  
+ if (Command_LED)  { Command_LED = false; Serial.println("**** COMMMAND_LED  ******"); Timer_ON.once(0.0, LED_ON); Timer_OFF.once(DURATION_SIREN, LED_OFF); envoi("sensor_update", "ACK"); }
+
+ if (Command_FirmwareUpgrade) {  /* envoi("sensor_update", "ACK"); */  FOTA_Check(); }  
+
+ if (Command_Reset) { /* envoi("sensor_update", "ACK"); delay(100) ;*/ ESP.restart();  }  
+
+// if (Command_Sleep) 
     
- if (b_SendAcknowledgement) envoi("sensor_update", "ACK");      
+    
+// if (b_SendAcknowledgement) envoi("sensor_update", "ACK");      
   
 }
